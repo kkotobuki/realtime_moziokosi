@@ -56,6 +56,11 @@ npm install
 
 ### 2. 環境変数の設定
 
+環境変数保存フォルダ
+```bash
+https://drive.google.com/drive/folders/1BhDQG-wbT78UkORWoFFE1Z2TAA9JGdwV?usp=drive_link
+```
+
 `.env.example` を参考に `.env` を作成してください。
 
 ```bash
