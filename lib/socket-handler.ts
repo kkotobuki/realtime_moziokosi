@@ -30,12 +30,14 @@ export function setupSocketHandlers(io: SocketIOServer) {
       const mode = data.params?.mode || 'normal';
       const minTranscribeDurationSec =
         data.params?.minTranscribeDurationSec || 2.0;
+      const meetingInput = data.params?.meetingInput;
 
       audioBufferService.createSession(
         data.sessionId,
         data.lang,
         mode,
         minTranscribeDurationSec,
+        meetingInput,
       );
 
       socket.emit('session_started', {
@@ -79,6 +81,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
         const result = await groqSTTService.transcribe(
           buffer,
           session.language,
+          session.meetingInput,
         );
 
         if (result.text) {

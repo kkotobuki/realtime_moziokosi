@@ -154,6 +154,7 @@ export default function Home() {
           maxSilenceMs: 2000,
           minTranscribeDurationSec: 2.0,
           mode: "normal",
+          meetingInput,
         },
       });
 

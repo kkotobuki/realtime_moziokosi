@@ -16,6 +16,7 @@ export class AudioBufferService {
     language: string = 'ja',
     mode: string = 'normal',
     minTranscribeDurationSec: number = 2.0,
+    meetingInput?: { purpose: string; agenda: string[] },
   ): void {
     console.log(`Creating session: ${sessionId}`);
     this.sessions.set(sessionId, {
@@ -29,6 +30,7 @@ export class AudioBufferService {
       minTranscribeDurationSec,
       sheetsRowNumber: undefined,
       sheetsAccumulatedText: '',
+      meetingInput,
     });
   }
 

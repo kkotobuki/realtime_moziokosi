@@ -3,7 +3,7 @@ dotenv.config();
 
 import axios from 'axios';
 import FormData from 'form-data';
-import { TranscriptionResult } from '@/types';
+import { TranscriptionResult, MeetingInput } from '@/types';
 
 export class GroqSTTService {
   private readonly apiKey: string;
@@ -20,6 +20,7 @@ export class GroqSTTService {
   async transcribe(
     audioBuffer: Buffer,
     language: string = 'ja',
+    meetingInput?: MeetingInput,
   ): Promise<TranscriptionResult> {
     try {
       const wavBuffer = this.pcmToWav(audioBuffer, 16000, 1);
@@ -33,6 +34,12 @@ export class GroqSTTService {
       formData.append('language', language);
       formData.append('response_format', 'verbose_json');
       formData.append('temperature', '0');
+
+      // 会議情報からプロンプトを生成
+      if (meetingInput) {
+        const prompt = this.generatePrompt(meetingInput);
+        formData.append('prompt', prompt);
+      }
 
       const response = await axios.post(this.apiUrl, formData, {
         headers: {
@@ -83,6 +90,18 @@ export class GroqSTTService {
     if (duration < 2 && text.length <= 10) return true;
 
     return false;
+  }
+
+  private generatePrompt(meetingInput: MeetingInput): string {
+    const agendaList = meetingInput.agenda
+      .map((item, index) => `${index + 1}. ${item}`)
+      .join('\n');
+
+    return `# 会議の目的
+${meetingInput.purpose}
+
+# アジェンダ
+${agendaList}`;
   }
 
   private calculateConfidence(data: any): number {

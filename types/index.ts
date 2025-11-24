@@ -7,6 +7,12 @@ export interface TranscriptEntry {
   confidence?: number;
 }
 
+// 会議情報
+export interface MeetingInput {
+  purpose: string;
+  agenda: string[];
+}
+
 // オーディオセッション
 export interface AudioSession {
   sessionId: string;
@@ -20,6 +26,7 @@ export interface AudioSession {
   minTranscribeDurationSec: number;
   sheetsRowNumber?: number;
   sheetsAccumulatedText?: string;
+  meetingInput?: MeetingInput;
 }
 
 // STT結果

@@ -89,26 +89,11 @@ NODE_ENV=development
 CORS_ORIGIN=http://localhost:3000
 ```
 
-#### Google Sheets API の設定手順
+## 画面から聞こえる音声を文字起こしするために必要な設定
 
-1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成
-2. Google Sheets API を有効化
-3. サービスアカウントを作成し、JSONキーをダウンロード
-4. JSONキーから `client_email` と `private_key` を `.env` に設定
-5. Google Sheetsを作成し、シートIDを `.env` の `GOOGLE_SHEETS_SPREADSHEET_ID` に設定
-6. 作成したシートをサービスアカウントのメールアドレスと共有(編集権限)
-
-#### Gemini API の取得
-
-1. [Google AI Studio](https://makersuite.google.com/app/apikey) にアクセス
-2. APIキーを作成
-3. `.env` の `GEMINI_API_KEY` に設定
-
-#### Groq API の取得
-
-1. [Groq Console](https://console.groq.com/) にアクセス
-2. APIキーを作成
-3. `.env` の `GROQ_API_KEY` に設定
+```bash
+https://note.com/aimasterroad/n/nc80e25e4e1c5
+```
 
 ## 起動方法
 
