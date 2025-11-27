@@ -4,7 +4,9 @@ import { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 import MermaidViewer from "@/components/MermaidViewer";
 import MeetingInput from "@/components/MeetingInput";
+import AudioDeviceInput from "@/components/AudioDeviceInput";
 import DecisionsList from "@/components/DecisionsList";
+import ChatTranscriptView from "@/components/ChatTranscriptView";
 import { TranscriptEntry, DecisionExtractResult } from "@/types";
 import type { MeetingInput as MeetingInputType } from "@/lib/services/gemini-decision-extractor";
 
@@ -16,19 +18,55 @@ export default function Home() {
   const [error, setError] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("未接続");
 
-  // 決定事項抽出関連
+  // 画像生成関連
   const [meetingInput, setMeetingInput] = useState<MeetingInputType | null>(null);
   const [decisionsResult, setDecisionsResult] = useState<DecisionExtractResult | null>(null);
   const [decisionsLoading, setDecisionsLoading] = useState(false);
 
+  // オーディオデバイス選択
+  const [micDeviceId, setMicDeviceId] = useState<string>("");
+  const [systemDeviceId, setSystemDeviceId] = useState<string>("");
+  const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
+
   const socketRef = useRef<Socket | null>(null);
   const sessionIdRef = useRef<string>("");
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const isSpeakingRef = useRef<boolean>(false);
-  const noiseFloorRef = useRef<number>(0.01);
+
+  // マイク用
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micAudioContextRef = useRef<AudioContext | null>(null);
+  const micSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const micIsSpeakingRef = useRef<boolean>(false);
+  const micNoiseFloorRef = useRef<number>(0.01);
+
+  // タブ音声用
+  const tabStreamRef = useRef<MediaStream | null>(null);
+  const tabAudioContextRef = useRef<AudioContext | null>(null);
+  const tabSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const tabIsSpeakingRef = useRef<boolean>(false);
+  const tabNoiseFloorRef = useRef<number>(0.01);
+
   const autoExtractTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // オーディオデバイス一覧を取得
+  useEffect(() => {
+    const getAudioDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(device => device.kind === 'audioinput');
+        setAudioDevices(audioInputs);
+      } catch (err) {
+        console.error('Failed to enumerate devices:', err);
+      }
+    };
+
+    getAudioDevices();
+
+    // デバイス変更を監視
+    navigator.mediaDevices.addEventListener('devicechange', getAudioDevices);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', getAudioDevices);
+    };
+  }, []);
 
   useEffect(() => {
     // WebSocket接続
@@ -62,6 +100,7 @@ export default function Home() {
           text: data.text,
           sessionId: data.sessionId,
           confidence: data.confidence,
+          source: data.source || 'microphone', // デフォルトはマイク
         };
         setTranscripts((prev) => [...prev, entry]);
       }
@@ -77,7 +116,7 @@ export default function Home() {
     };
   }, []);
 
-  // リアルタイム決定事項抽出
+  // リアルタイム画像生成
   useEffect(() => {
     if (!meetingInput || transcripts.length === 0 || !isRecording) {
       return;
@@ -88,7 +127,7 @@ export default function Home() {
       clearTimeout(autoExtractTimerRef.current);
     }
 
-    // 30秒後に自動抽出
+    // 30秒後に自動生成
     autoExtractTimerRef.current = setTimeout(() => {
       if (meetingInput && transcripts.length > 0) {
         setDecisionsLoading(true);
@@ -109,7 +148,7 @@ export default function Home() {
             setDecisionsResult(data);
           })
           .catch((err) => {
-            console.error("Auto-extract error:", err);
+            console.error("Auto-generate error:", err);
           })
           .finally(() => {
             setDecisionsLoading(false);
@@ -124,24 +163,143 @@ export default function Home() {
     };
   }, [transcripts, meetingInput, isRecording]);
 
+  // 音声処理の共通ロジック
+  const setupAudioProcessor = (
+    stream: MediaStream,
+    audioContext: AudioContext,
+    source: 'microphone' | 'tab',
+    isSpeakingRef: React.MutableRefObject<boolean>,
+    silenceTimerRef: React.MutableRefObject<NodeJS.Timeout | null>,
+    noiseFloorRef: React.MutableRefObject<number>
+  ) => {
+    const mediaSource = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+    mediaSource.connect(processor);
+    processor.connect(audioContext.destination);
+
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+
+      // VADアルゴリズム実装
+      let sum = 0;
+      let peak = 0;
+      for (let i = 0; i < inputData.length; i++) {
+        const val = Math.abs(inputData[i]);
+        sum += inputData[i] * inputData[i];
+        peak = Math.max(peak, val);
+      }
+      const rms = Math.sqrt(sum / inputData.length);
+      const energyLevel = rms;
+
+      // 適応的閾値計算
+      if (!isSpeakingRef.current) {
+        noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
+      }
+      const threshold = noiseFloorRef.current * 5.0;
+
+      // 音声レベルを定期的にログ出力（デバッグ用）
+      if (Math.random() < 0.01) { // 1%の確率でログ出力（頻度を抑える）
+        console.log(`[${source}] RMS: ${rms.toFixed(4)}, Peak: ${peak.toFixed(4)}, Threshold: ${threshold.toFixed(4)}`);
+      }
+
+      const SILENCE_DURATION_MS = 1500;
+
+      // PCM16に変換して送信
+      const pcm16 = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        const s = Math.max(-1, Math.min(1, inputData[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      socketRef.current?.emit("audio", {
+        buffer: pcm16.buffer,
+        source: source,
+        sessionId: sessionIdRef.current,
+      });
+
+      // VAD状態管理
+      const isSpeech = energyLevel > threshold || peak > threshold * 1.5;
+
+      if (isSpeech) {
+        if (!isSpeakingRef.current) {
+          console.log(`[${source}] Speech started (RMS:`, rms.toFixed(4), "Threshold:", threshold.toFixed(4), ")");
+          isSpeakingRef.current = true;
+        }
+
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+      } else if (isSpeakingRef.current) {
+        if (!silenceTimerRef.current) {
+          silenceTimerRef.current = setTimeout(() => {
+            console.log(`[${source}] Speech ended (silence detected after`, SILENCE_DURATION_MS, "ms)");
+            isSpeakingRef.current = false;
+
+            socketRef.current?.emit("speech_ended", {
+              sessionId: sessionIdRef.current,
+              timestamp: Date.now(),
+              source: source,
+            });
+
+            silenceTimerRef.current = null;
+          }, SILENCE_DURATION_MS);
+        }
+      }
+    };
+  };
+
   const startRecording = async () => {
     try {
       setError("");
-      const stream = await navigator.mediaDevices.getUserMedia({
+
+      // デバイスが選択されていない場合はエラー
+      if (!micDeviceId || !systemDeviceId) {
+        setError("マイクとシステム音声の両方のデバイスを選択してください");
+        return;
+      }
+
+      // デバイス情報をログ出力
+      const micDevice = audioDevices.find(d => d.deviceId === micDeviceId);
+      const systemDevice = audioDevices.find(d => d.deviceId === systemDeviceId);
+      console.log('=== 選択されたデバイス ===');
+      console.log('マイク:', micDevice?.label || micDeviceId);
+      console.log('システム音声:', systemDevice?.label || systemDeviceId);
+
+      // セッションID生成
+      sessionIdRef.current = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+      // マイク音声をキャプチャ
+      const micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
+          deviceId: { exact: micDeviceId },
           sampleRate: 16000,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
         },
       });
+      micStreamRef.current = micStream;
+      const micAudioContext = new AudioContext({ sampleRate: 16000 });
+      micAudioContextRef.current = micAudioContext;
 
-      mediaStreamRef.current = stream;
-      const audioContext = new AudioContext({ sampleRate: 16000 });
-      audioContextRef.current = audioContext;
+      // システム音声(仮想オーディオデバイス)をキャプチャ
+      console.log('システム音声のキャプチャを開始...');
+      const systemStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: { exact: systemDeviceId },
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+        },
+      });
+      console.log('システム音声のキャプチャ成功');
+      console.log('システム音声トラック数:', systemStream.getAudioTracks().length);
 
-      // セッションID生成
-      sessionIdRef.current = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      tabStreamRef.current = systemStream;
+      const systemAudioContext = new AudioContext({ sampleRate: 16000 });
+      tabAudioContextRef.current = systemAudioContext;
 
       // セッション開始
       socketRef.current?.emit("start", {
@@ -158,95 +316,66 @@ export default function Home() {
         },
       });
 
-      // AudioWorkletとVADの実装
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      // マイク音声処理セットアップ
+      setupAudioProcessor(
+        micStream,
+        micAudioContext,
+        'microphone',
+        micIsSpeakingRef,
+        micSilenceTimerRef,
+        micNoiseFloorRef
+      );
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-
-        // VADアルゴリズム実装
-        let sum = 0;
-        let peak = 0;
-        for (let i = 0; i < inputData.length; i++) {
-          const val = Math.abs(inputData[i]);
-          sum += inputData[i] * inputData[i];
-          peak = Math.max(peak, val);
-        }
-        const rms = Math.sqrt(sum / inputData.length);
-        const energyLevel = rms;
-
-        // 適応的閾値計算
-        if (!isSpeakingRef.current) {
-          noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
-        }
-        const threshold = noiseFloorRef.current * 5.0;
-
-        const SILENCE_DURATION_MS = 1500;
-
-        // PCM16に変換して送信
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
-        socketRef.current?.emit("audio", pcm16.buffer);
-
-        // VAD状態管理
-        const isSpeech = energyLevel > threshold || peak > threshold * 1.5;
-
-        if (isSpeech) {
-          if (!isSpeakingRef.current) {
-            console.log("Speech started (RMS:", rms.toFixed(4), "Threshold:", threshold.toFixed(4), ")");
-            isSpeakingRef.current = true;
-          }
-
-          if (silenceTimerRef.current) {
-            clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = null;
-          }
-        } else if (isSpeakingRef.current) {
-          if (!silenceTimerRef.current) {
-            silenceTimerRef.current = setTimeout(() => {
-              console.log("Speech ended (silence detected after", SILENCE_DURATION_MS, "ms)");
-              isSpeakingRef.current = false;
-
-              socketRef.current?.emit("speech_ended", {
-                sessionId: sessionIdRef.current,
-                timestamp: Date.now(),
-              });
-
-              silenceTimerRef.current = null;
-            }, SILENCE_DURATION_MS);
-          }
-        }
-      };
+      // システム音声処理セットアップ
+      setupAudioProcessor(
+        systemStream,
+        systemAudioContext,
+        'tab',
+        tabIsSpeakingRef,
+        tabSilenceTimerRef,
+        tabNoiseFloorRef
+      );
 
       setIsRecording(true);
     } catch (err) {
       console.error("Error starting recording:", err);
-      setError("マイクへのアクセスに失敗しました");
+      setError("オーディオデバイスへのアクセスに失敗しました");
     }
   };
 
   const stopRecording = () => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
+    // マイクのクリーンアップ
+    if (micSilenceTimerRef.current) {
+      clearTimeout(micSilenceTimerRef.current);
+      micSilenceTimerRef.current = null;
     }
-    isSpeakingRef.current = false;
+    micIsSpeakingRef.current = false;
 
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
     }
 
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
+    if (micAudioContextRef.current) {
+      micAudioContextRef.current.close();
+      micAudioContextRef.current = null;
+    }
+
+    // タブ音声のクリーンアップ
+    if (tabSilenceTimerRef.current) {
+      clearTimeout(tabSilenceTimerRef.current);
+      tabSilenceTimerRef.current = null;
+    }
+    tabIsSpeakingRef.current = false;
+
+    if (tabStreamRef.current) {
+      tabStreamRef.current.getTracks().forEach((track) => track.stop());
+      tabStreamRef.current = null;
+    }
+
+    if (tabAudioContextRef.current) {
+      tabAudioContextRef.current.close();
+      tabAudioContextRef.current = null;
     }
 
     if (socketRef.current && sessionIdRef.current) {
@@ -304,17 +433,7 @@ export default function Home() {
     }
   };
 
-  const handleExtractDecisions = async () => {
-    if (transcripts.length === 0) {
-      setError("文字起こし履歴がありません");
-      return;
-    }
-
-    if (!meetingInput) {
-      setError("会議情報を設定してください");
-      return;
-    }
-
+  const handleGenerateImage = async () => {
     setDecisionsLoading(true);
     setError("");
 
@@ -324,7 +443,10 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ transcripts, meetingInput }),
+        body: JSON.stringify({
+          transcripts,
+          meetingInput: meetingInput || { purpose: "一般的な会議", agenda: ["議題1"] }
+        }),
       });
 
       const data = await response.json();
@@ -342,50 +464,61 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen bg-linear-to-br from-blue-50 via-indigo-50 to-purple-50">
+    <main className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
       <div className="h-screen flex flex-col">
         {/* ヘッダー */}
-        <div className="bg-white/80 backdrop-blur-sm px-16 py-8 border-b border-indigo-100 shadow-sm">
-          <div className="max-w-[1920px] mx-auto flex items-center justify-between gap-12 px-8">
-            <h1 className="text-3xl font-bold bg-linear-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
+        <div className="bg-white border-b-4 border-indigo-600 shadow-md">
+          <div className="max-w-[1920px] mx-auto flex items-center justify-between px-12 py-6">
+            <h1 className="text-4xl font-black text-indigo-900 uppercase tracking-tight">
               リアルタイム文字起こし
             </h1>
             {/* 接続状態インジケータ */}
-            <div className="flex items-center gap-4 px-8 py-4 bg-white rounded-full shadow-sm border border-indigo-100">
+            <div className="flex items-center gap-3 px-6 py-3 bg-gray-100 border-2 border-gray-300">
               <span
-                className={`w-2 h-2 rounded-full ${
+                className={`w-3 h-3 ${
                   connectionStatus === "接続済み" || connectionStatus === "セッション開始"
                     ? "bg-emerald-500"
                     : "bg-rose-500"
                 }`}
               ></span>
-              <span className="text-xs text-indigo-700 font-medium">{connectionStatus}</span>
+              <span className="text-sm text-gray-900 font-bold uppercase tracking-wide">{connectionStatus}</span>
             </div>
           </div>
         </div>
 
         {/* メインコンテンツ */}
-        <div className="flex-1 overflow-hidden p-8">
-          <div className="h-full max-w-[1920px] mx-auto px-4">
-            {/* 上部: 会議情報入力 */}
-            <div className="mb-6">
+        <div className="flex-1 overflow-hidden px-16 py-8">
+          <div className="h-full max-w-[1800px] mx-auto">
+            {/* 上部: 会議情報入力とオーディオデバイス設定 */}
+            <div className="mb-8 grid grid-cols-2 gap-8">
+              {/* 左: 会議情報 */}
               <MeetingInput
                 onSubmit={setMeetingInput}
+                disabled={isRecording}
+              />
+
+              {/* 右: オーディオデバイス設定 */}
+              <AudioDeviceInput
+                micDeviceId={micDeviceId}
+                systemDeviceId={systemDeviceId}
+                audioDevices={audioDevices}
+                onMicChange={setMicDeviceId}
+                onSystemChange={setSystemDeviceId}
                 disabled={isRecording}
               />
             </div>
 
             {/* メインコンテンツグリッド */}
-            <div className="h-[calc(100%-120px)] grid grid-cols-3 gap-6">
+            <div className="h-[calc(100%-180px)] grid grid-cols-3 gap-8">
               {/* 左: 文字起こしドキュメント */}
-              <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-indigo-100 flex flex-col overflow-hidden">
-              <div className="px-8 py-4 bg-linear-to-r from-blue-500 to-indigo-500 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-white">文字起こし</h2>
-                <div className="flex gap-2">
+              <div className="bg-white shadow-lg border border-gray-300 flex flex-col overflow-hidden">
+              <div className="px-8 py-5 bg-gradient-to-r from-blue-600 to-indigo-600 border-b-4 border-blue-700 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-white uppercase tracking-tight">文字起こし</h2>
+                <div className="flex gap-3">
                   {!isRecording ? (
                     <button
                       onClick={startRecording}
-                      className="bg-white text-indigo-600 hover:bg-indigo-50 font-semibold py-2 px-6 rounded-lg transition-all shadow-md"
+                      className="bg-white text-indigo-700 hover:bg-indigo-50 font-bold py-2 px-6 transition-all shadow-lg uppercase tracking-wide text-sm"
                       aria-label="録音を開始"
                     >
                       開始
@@ -393,7 +526,7 @@ export default function Home() {
                   ) : (
                     <button
                       onClick={stopRecording}
-                      className="bg-white text-rose-600 hover:bg-rose-50 font-semibold py-2 px-6 rounded-lg transition-all shadow-md"
+                      className="bg-white text-rose-700 hover:bg-rose-50 font-bold py-2 px-6 transition-all shadow-lg uppercase tracking-wide text-sm"
                       aria-label="録音を停止"
                     >
                       停止
@@ -401,74 +534,68 @@ export default function Home() {
                   )}
                   <button
                     onClick={handleNewSession}
-                    className="bg-white/20 hover:bg-white/30 text-white font-semibold py-2 px-6 rounded-lg transition-all backdrop-blur-sm"
+                    className="bg-blue-800 hover:bg-blue-900 text-white font-bold py-2 px-6 transition-all border-2 border-white uppercase tracking-wide text-sm"
                     aria-label="キャッシュをクリア"
                   >
                     クリア
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-12">
+              <div className="flex-1 overflow-y-auto p-8">
                 {transcripts.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-indigo-300 px-8">
-                    <p className="text-center max-w-2xl">
+                  <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                    <p className="text-center text-lg font-medium text-gray-500">
                       「開始」ボタンを押して話しかけてください
                     </p>
                   </div>
                 ) : (
-                  <div className="prose prose-indigo max-w-none">
-                    {transcripts.map((entry) => (
-                      <p key={entry.id} className="mb-4 text-gray-800 leading-relaxed">
-                        {entry.text}
-                      </p>
-                    ))}
-                  </div>
+                  <ChatTranscriptView transcripts={transcripts} />
                 )}
               </div>
             </div>
 
-              {/* 中央: マーメイド図 */}
-              <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-purple-100 flex flex-col overflow-hidden">
-                <div className="px-8 py-4 bg-linear-to-r from-purple-500 to-pink-500 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-white">マーメイド図</h2>
+              {/* 中央: マーメイド記法 */}
+              <div className="bg-white shadow-lg border border-gray-300 flex flex-col overflow-hidden">
+                <div className="px-8 py-5 bg-gradient-to-r from-purple-600 to-pink-600 border-b-4 border-purple-700 flex items-center justify-between">
+                  <h2 className="text-2xl font-bold text-white uppercase tracking-tight">マーメイド記法</h2>
                   <button
                     onClick={handleGenerateMermaid}
                     disabled={loading || transcripts.length === 0}
-                    className="bg-white text-purple-600 hover:bg-purple-50 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed font-semibold py-2 px-6 rounded-lg transition-all shadow-md"
-                    aria-label="マーメイド図を生成"
+                    className="bg-white text-purple-700 hover:bg-purple-50 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed font-bold py-2 px-6 transition-all shadow-lg uppercase tracking-wide text-sm"
+                    aria-label="マーメイド記法を生成"
                   >
                     {loading ? "生成中..." : "図を生成"}
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-8">
                   {mermaidCode ? (
-                    <div className="space-y-4">
+                    <div className="space-y-6">
                       <MermaidViewer code={mermaidCode} />
                       <details className="mt-4">
-                        <summary className="cursor-pointer text-sm text-purple-600 hover:text-purple-700 font-medium">
+                        <summary className="cursor-pointer text-sm text-purple-700 hover:text-purple-900 font-bold uppercase tracking-wide border-b-2 border-purple-200 pb-2">
                           マーメイド記法を表示
                         </summary>
-                        <pre className="mt-3 p-4 bg-purple-50 rounded-lg overflow-auto text-xs font-mono border border-purple-100">
+                        <pre className="mt-4 p-6 bg-gray-50 border-2 border-gray-300 overflow-auto text-xs font-mono">
                           {mermaidCode}
                         </pre>
                       </details>
                     </div>
                   ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-purple-300">
-                      <p className="text-center">
-                        文字起こし後に「図を生成」ボタンをクリック
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                      <p className="text-center text-lg font-medium text-gray-500">
+                        文字起こし後に右上の「図を生成」ボタンをクリック
                       </p>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* 右: 決定事項 */}
+              {/* 右: AI画像生成 */}
               <DecisionsList
                 result={decisionsResult}
                 loading={decisionsLoading}
-                onExtract={handleExtractDecisions}
-                disabled={!meetingInput || transcripts.length === 0}
+                onExtract={handleGenerateImage}
+                disabled={false}
               />
             </div>
           </div>
@@ -477,7 +604,7 @@ export default function Home() {
         {/* エラー表示（下部中央） */}
         {error && (
           <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-10">
-            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-6 py-3 shadow-lg">
+            <div className="bg-red-100 border-4 border-red-500 text-red-900 px-8 py-4 shadow-2xl font-bold uppercase tracking-wide">
               {error}
             </div>
           </div>

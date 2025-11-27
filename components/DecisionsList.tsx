@@ -16,26 +16,28 @@ export default function DecisionsList({
   disabled,
 }: DecisionsListProps) {
   return (
-    <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg border border-amber-100 flex flex-col overflow-hidden h-full">
+    <div className="bg-white shadow-sm border border-gray-200 flex flex-col overflow-hidden h-full">
       {/* ヘッダー */}
-      <div className="px-8 py-4 bg-linear-to-r from-amber-500 to-orange-500 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-white">決定事項</h2>
-        <button
-          type="button"
-          onClick={onExtract}
-          disabled={loading || disabled}
-          className="bg-white text-amber-600 hover:bg-amber-50 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed font-semibold py-2 px-6 rounded-lg transition-all shadow-md"
-        >
-          {loading ? "抽出中..." : "決定事項を抽出"}
-        </button>
+      <div className="px-12 py-6 bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 border-b-4 border-purple-700">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold text-white tracking-tight">AI画像生成</h2>
+          <button
+            type="button"
+            onClick={onExtract}
+            disabled={loading}
+            className="bg-white text-purple-700 hover:bg-purple-50 disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed font-bold py-3 px-8 transition-all shadow-lg hover:shadow-xl uppercase tracking-wide text-sm"
+          >
+            {loading ? "生成中..." : "画像を生成"}
+          </button>
+        </div>
       </div>
 
       {/* コンテンツ */}
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto">
         {!result ? (
-          <div className="h-full flex flex-col items-center justify-center text-amber-300">
+          <div className="h-full flex flex-col items-center justify-center px-16 py-24">
             <svg
-              className="w-16 h-16 mb-4"
+              className="w-32 h-32 mb-6 text-purple-300"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -43,78 +45,87 @@ export default function DecisionsList({
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                strokeWidth={1.5}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
               />
             </svg>
-            <p className="text-center">会議情報を設定し、文字起こし後に抽出ボタンをクリック</p>
+            <p className="text-center text-xl font-bold text-gray-700 mb-4">
+              会議内容をビジュアル化
+            </p>
+            <p className="text-center text-base text-gray-600 mb-2">
+              右上の「画像を生成」ボタンをクリック
+            </p>
+            <p className="text-center text-sm text-gray-500 mb-6">
+              文字起こしや会議情報がある場合はその内容から画像を生成します
+            </p>
+            <p className="text-center text-sm text-purple-600 font-bold mt-6">
+              Powered by Gemini Nano Banana
+            </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* 概要 */}
-            {result.summary && (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-amber-900 mb-2">概要</h3>
-                <p className="text-sm text-amber-800">{result.summary}</p>
-              </div>
-            )}
+          <div className="p-12">
+            {/* 生成された画像 */}
+            {result.summaryImage ? (
+              <div className="space-y-8">
+                <div className="bg-gradient-to-br from-purple-100 via-pink-100 to-orange-100 p-8 border-l-8 border-purple-600">
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="bg-purple-600 p-3">
+                      <svg
+                        className="w-8 h-8 text-white"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                        />
+                      </svg>
+                    </div>
+                    <h3 className="text-2xl font-bold text-gray-900 uppercase tracking-wide">
+                      生成結果
+                    </h3>
+                  </div>
+                  <div className="bg-white border-4 border-gray-300 shadow-xl">
+                    <img
+                      src={result.summaryImage}
+                      alt="会議内容をビジュアル化したAI生成画像"
+                      className="w-full h-auto"
+                    />
+                  </div>
+                  <div className="mt-6 p-4 bg-white border-l-4 border-purple-600">
+                    <p className="text-base text-gray-800 leading-relaxed">
+                      {result.summary}
+                    </p>
+                  </div>
+                </div>
 
-            {/* 決定事項リスト */}
-            {result.decisions.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>決定事項が見つかりませんでした</p>
-                <p className="text-xs mt-2">
-                  明確な決定を示す表現が含まれていない可能性があります
-                </p>
+                {/* 生成時刻 */}
+                <div className="text-sm text-gray-500 text-right border-t-2 border-gray-200 pt-4">
+                  生成日時: {new Date(result.extractedAt).toLocaleString("ja-JP")}
+                </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                <h3 className="text-sm font-semibold text-gray-700">
-                  決定事項 ({result.decisions.length}件)
-                </h3>
-                {result.decisions.map((decision) => (
-                  <div
-                    key={decision.id}
-                    className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow"
-                  >
-                    <div className="flex items-start justify-between gap-4 mb-3">
-                      <p className="text-gray-800 flex-1">{decision.content}</p>
-                      {/* 信頼度バッジ */}
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${
-                          decision.confidence >= 0.8
-                            ? "bg-emerald-100 text-emerald-700"
-                            : decision.confidence >= 0.5
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-gray-100 text-gray-700"
-                        }`}
-                      >
-                        {Math.round(decision.confidence * 100)}%
-                      </span>
-                    </div>
-
-                    {/* 関連アジェンダ */}
-                    {decision.relatedAgendaItems.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {decision.relatedAgendaItems.map((item) => (
-                          <span
-                            key={item}
-                            className="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border border-blue-200"
-                          >
-                            アジェンダ {item}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
+              <div className="text-center py-24">
+                <svg
+                  className="w-20 h-20 mx-auto mb-6 text-red-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <p className="text-xl font-bold text-gray-700 mb-3">画像生成エラー</p>
+                <p className="text-base text-gray-600">もう一度お試しください</p>
               </div>
             )}
-
-            {/* 抽出時刻 */}
-            <div className="text-xs text-gray-400 text-center pt-4 border-t border-gray-100">
-              抽出日時: {new Date(result.extractedAt).toLocaleString("ja-JP")}
-            </div>
           </div>
         )}
       </div>

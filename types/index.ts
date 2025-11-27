@@ -1,3 +1,6 @@
+// 音声ソースタイプ
+export type AudioSourceType = 'microphone' | 'tab';
+
 // トランスクリプトエントリー
 export interface TranscriptEntry {
   id: string;
@@ -5,6 +8,7 @@ export interface TranscriptEntry {
   text: string;
   sessionId: string;
   confidence?: number;
+  source: AudioSourceType;
 }
 
 // 会議情報
@@ -36,7 +40,7 @@ export interface TranscriptionResult {
   duration?: number;
 }
 
-// マーメイド図生成結果
+// マーメイド記法生成結果
 export interface MermaidResult {
   mermaidCode: string;
   diagramType: string;
@@ -56,4 +60,5 @@ export interface DecisionExtractResult {
   decisions: Decision[];
   summary: string;
   extractedAt: Date;
+  summaryImage?: string; // Base64エンコードされた画像データ (data:image/png;base64,...)
 }

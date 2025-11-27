@@ -1,15 +1,14 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { TranscriptEntry, DecisionExtractResult, Decision } from '@/types';
+import { GoogleGenAI } from '@google/genai';
+import { TranscriptEntry, DecisionExtractResult } from '@/types';
 import type { MeetingInput } from './gemini-mermaid';
 
 export type { MeetingInput };
 
 export class GeminiDecisionExtractor {
-  private genAI: GoogleGenerativeAI | null = null;
-  private model: any;
+  private imageGenAI: GoogleGenAI | null = null;
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -19,45 +18,42 @@ export class GeminiDecisionExtractor {
     }
 
     try {
-      this.genAI = new GoogleGenerativeAI(apiKey);
-      this.model = this.genAI.getGenerativeModel({
-        model: 'gemini-2.5-pro',
+      // 画像生成用のAIインスタンスを初期化
+      this.imageGenAI = new GoogleGenAI({
+        apiKey: apiKey,
       });
-      console.log('Gemini API initialized successfully for decision extraction');
+
+      console.log('Gemini API initialized successfully for image generation');
     } catch (error) {
       console.error('Failed to initialize Gemini API:', error);
     }
   }
 
-  async extractDecisions(
+  private async generateImageFromTranscripts(
     transcripts: TranscriptEntry[],
     meetingInput: MeetingInput,
-  ): Promise<DecisionExtractResult> {
-    if (!this.model) {
-      throw new Error('Gemini API is not configured');
+  ): Promise<string | undefined> {
+    if (!this.imageGenAI) {
+      console.warn('Image generation API is not configured');
+      return undefined;
     }
 
-    if (!transcripts || transcripts.length === 0) {
-      throw new Error('No transcripts provided');
-    }
+    try {
+      // 文字起こし履歴を整形
+      const formattedHistory = transcripts
+        .map((entry) => {
+          const time = new Date(entry.timestamp).toLocaleTimeString('ja-JP');
+          const source = entry.source === 'microphone' ? 'あなた' : '相手';
+          return `[${time}] ${source}: ${entry.text}`;
+        })
+        .join('\n');
 
-    // 最新1000エントリに制限
-    const limitedTranscripts = transcripts.slice(-1000);
+      const agendaList = meetingInput.agenda
+        .map((item, index) => `${index + 1}. ${item}`)
+        .join('\n');
 
-    // 履歴を整形
-    const formattedHistory = limitedTranscripts
-      .map((entry) => {
-        const time = new Date(entry.timestamp).toLocaleTimeString('ja-JP');
-        return `[${time}] ${entry.text}`;
-      })
-      .join('\n');
-
-    const agendaList = meetingInput.agenda
-      .map((item, index) => `${index + 1}. ${item}`)
-      .join('\n');
-
-    const prompt = `あなたは会議の文字起こしから決定事項を抽出する専門家です。
-以下の会議の目的とアジェンダに基づいて、文字起こしの中から決定事項を抽出してください。
+      const prompt = `以下の会議の文字起こし内容をビジュアル化した画像を生成してください。
+会議の流れ、主要なトピック、決定事項などを分かりやすく視覚的に魅力的なインフォグラフィックにしてください。文字は日本語です。
 
 # 会議の目的
 ${meetingInput.purpose}
@@ -65,72 +61,173 @@ ${meetingInput.purpose}
 # アジェンダ
 ${agendaList}
 
-# 抽出ルール
-- アジェンダに関連のある話で、誰かが次に行動を起こさなければならない内容を抽出する
-- 問題として定義されていて、誰かが行動を起こして解決しなければならない内容を抽出する
-- 会議の目的を達成するために必要な内容を抽出する
-
-# 出力形式
-JSON形式で以下の構造で出力してください：
-{
-  "decisions": [
-    {
-      "content": "決定内容の要約",
-      "relatedAgendaItems": ["関連するアジェンダの番号（例: "1", "2"）"],
-      "confidence": 0.0〜1.0の数値
-    }
-  ],
-  "summary": "会議全体の決定事項の概要を2〜3文で"
-}
-
-重要:
-- 純粋なJSON形式のみを出力してください
-- マークダウンのコードブロック（\`\`\`json）は含めないでください
-- 説明文や余計な文章は含めないでください
-
-# 文字起こし履歴
+# 文字起こし内容
 ${formattedHistory}
 
-JSON出力:`;
+この会議内容を、見やすく理解しやすいビジュアル形式で表現してください。`;
 
-    try {
-      const result = await this.model.generateContent(prompt);
-      const response = await result.response;
-      let jsonText = response.text();
+      const config = {
+        responseModalities: ['IMAGE', 'TEXT'],
+        imageConfig: {
+          imageSize: '1K',
+        },
+      };
+      const model = 'gemini-3-pro-image-preview';
+      const contents = [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ];
 
-      // マークダウンのコードブロック記法を除去
-      jsonText = jsonText.replace(/```json\n?/g, '');
-      jsonText = jsonText.replace(/```\n?/g, '');
-      jsonText = jsonText.trim();
+      const response = await this.imageGenAI.models.generateContentStream({
+        model,
+        config,
+        contents,
+      });
 
-      // JSONをパース
-      const parsedResult = JSON.parse(jsonText);
+      for await (const chunk of response) {
+        if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+          continue;
+        }
+        if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+          const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+          const mimeType = inlineData.mimeType || 'image/png';
+          const base64Data = inlineData.data || '';
 
-      // Decisionオブジェクトに変換
-      const decisions: Decision[] = parsedResult.decisions.map(
-        (d: any, index: number) => ({
-          id: `decision-${Date.now()}-${index}`,
-          content: d.content,
-          timestamp: new Date(),
-          relatedAgendaItems: d.relatedAgendaItems || [],
-          confidence: d.confidence || 0.5,
-        }),
+          // Base64データをdata URLとして返す
+          const dataUrl = `data:${mimeType};base64,${base64Data}`;
+          console.log('Transcript image generated successfully');
+          return dataUrl;
+        }
+      }
+
+      return undefined;
+    } catch (error) {
+      console.error('Failed to generate transcript image:', error);
+      return undefined;
+    }
+  }
+
+  async extractDecisions(
+    transcripts: TranscriptEntry[],
+    meetingInput: MeetingInput,
+  ): Promise<DecisionExtractResult> {
+    // 文字起こしがない場合でも画像生成を許可
+    const hasTranscripts = transcripts && transcripts.length > 0;
+
+    if (hasTranscripts) {
+      // 最新1000エントリに制限
+      const limitedTranscripts = transcripts.slice(-1000);
+
+      console.log(`Generating image from ${limitedTranscripts.length} transcript entries`);
+
+      // 文字起こしから直接画像を生成
+      const summaryImage = await this.generateImageFromTranscripts(
+        limitedTranscripts,
+        meetingInput,
       );
 
       const extractResult: DecisionExtractResult = {
-        decisions,
-        summary: parsedResult.summary || '決定事項が抽出されました',
+        decisions: [],
+        summary: '文字起こし内容から画像を生成しました',
         extractedAt: new Date(),
+        summaryImage,
       };
 
-      console.log(
-        `Extracted ${decisions.length} decisions from ${transcripts.length} transcripts`,
-      );
+      console.log(`Generated image from ${transcripts.length} transcripts`);
 
       return extractResult;
+    } else {
+      // 文字起こしがない場合は会議情報のみから画像生成
+      console.log('Generating image from meeting info only (no transcripts)');
+
+      const summaryImage = await this.generateImageFromMeetingInfo(meetingInput);
+
+      const extractResult: DecisionExtractResult = {
+        decisions: [],
+        summary: '会議情報から画像を生成しました',
+        extractedAt: new Date(),
+        summaryImage,
+      };
+
+      console.log('Generated image from meeting info');
+
+      return extractResult;
+    }
+  }
+
+  private async generateImageFromMeetingInfo(
+    meetingInput: MeetingInput,
+  ): Promise<string | undefined> {
+    if (!this.imageGenAI) {
+      console.warn('Image generation API is not configured');
+      return undefined;
+    }
+
+    try {
+      const agendaList = meetingInput.agenda
+        .map((item, index) => `${index + 1}. ${item}`)
+        .join('\n');
+
+      const prompt = `以下の会議について、視覚的に魅力的なインフォグラフィックを作成してください。
+会議の目的とアジェンダをわかりやすく表現してください。
+
+# 会議の目的
+${meetingInput.purpose}
+
+# アジェンダ
+${agendaList}
+
+この会議の内容を、見やすく理解しやすいビジュアル形式で表現してください。`;
+
+      const config = {
+        responseModalities: ['IMAGE', 'TEXT'],
+        imageConfig: {
+          imageSize: '1K',
+        },
+      };
+      const model = 'gemini-3-pro-image-preview';
+      const contents = [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+      ];
+
+      const response = await this.imageGenAI.models.generateContentStream({
+        model,
+        config,
+        contents,
+      });
+
+      for await (const chunk of response) {
+        if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+          continue;
+        }
+        if (chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData) {
+          const inlineData = chunk.candidates[0].content.parts[0].inlineData;
+          const mimeType = inlineData.mimeType || 'image/png';
+          const base64Data = inlineData.data || '';
+
+          const dataUrl = `data:${mimeType};base64,${base64Data}`;
+          console.log('Meeting info image generated successfully');
+          return dataUrl;
+        }
+      }
+
+      return undefined;
     } catch (error) {
-      console.error('Failed to extract decisions:', error);
-      throw error;
+      console.error('Failed to generate meeting info image:', error);
+      return undefined;
     }
   }
 }

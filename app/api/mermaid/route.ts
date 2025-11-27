@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error generating mermaid diagram:', error);
     return NextResponse.json(
-      { error: 'マーメイド図の生成に失敗しました' },
+      { error: 'マーメイド記法の生成に失敗しました' },
       { status: 500 }
     );
   }

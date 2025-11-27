@@ -51,27 +51,64 @@ export function setupSocketHandlers(io: SocketIOServer) {
     });
 
     // オーディオデータ受信
-    socket.on('audio', async (audioData: Buffer) => {
-      // クライアントから送信されたセッションIDを取得
-      const sessions = audioBufferService.getAllSessions();
-      if (sessions.length === 0) return;
+    socket.on('audio', async (audioData: Buffer | { buffer: ArrayBuffer; source: string; sessionId: string }) => {
+      let buffer: Buffer;
+      let source: string = 'microphone';
+      let sessionId: string | undefined;
 
-      const session = sessions[0];
-      audioBufferService.appendAudio(session.sessionId, audioData);
+      // 新しい形式(オブジェクト)か旧形式(バッファ)かを判定
+      if (Buffer.isBuffer(audioData)) {
+        buffer = audioData;
+        // 旧形式の場合はセッションを取得
+        const sessions = audioBufferService.getAllSessions();
+        if (sessions.length === 0) return;
+        sessionId = sessions[0].sessionId;
+      } else {
+        buffer = Buffer.from(audioData.buffer);
+        source = audioData.source || 'microphone';
+        sessionId = audioData.sessionId;
+      }
+
+      if (!sessionId) return;
+
+      // セッションIDに音声ソースを追加して別々に管理
+      const bufferSessionId = `${sessionId}_${source}`;
+
+      // セッションが存在しない場合は作成
+      let session = audioBufferService.getSession(bufferSessionId);
+      if (!session) {
+        const baseSession = audioBufferService.getSession(sessionId);
+        if (baseSession) {
+          audioBufferService.createSession(
+            bufferSessionId,
+            baseSession.language,
+            baseSession.mode,
+            baseSession.minTranscribeDurationSec,
+            baseSession.meetingInput,
+          );
+        } else {
+          return;
+        }
+      }
+
+      audioBufferService.appendAudio(bufferSessionId, buffer);
     });
 
     // 発話終了
-    socket.on('speech_ended', async (data: { sessionId: string; timestamp: number }) => {
-      console.log(`Speech ended for session: ${data.sessionId}`);
+    socket.on('speech_ended', async (data: { sessionId: string; timestamp: number; source?: string }) => {
+      const source = data.source || 'microphone';
+      const bufferSessionId = `${data.sessionId}_${source}`;
+
+      console.log(`Speech ended for session: ${data.sessionId}, source: ${source}`);
 
       try {
-        const buffer = audioBufferService.getBuffer(data.sessionId);
+        const buffer = audioBufferService.getBuffer(bufferSessionId);
         if (!buffer || buffer.length === 0) {
           console.warn('No audio buffer found');
           return;
         }
 
-        const session = audioBufferService.getSession(data.sessionId);
+        const session = audioBufferService.getSession(bufferSessionId);
         if (!session) {
           console.warn('Session not found');
           return;
@@ -86,7 +123,7 @@ export function setupSocketHandlers(io: SocketIOServer) {
 
         if (result.text) {
           const duration = audioBufferService.getBufferDuration(
-            data.sessionId,
+            bufferSessionId,
           );
 
           // クライアントに結果を送信
@@ -97,16 +134,17 @@ export function setupSocketHandlers(io: SocketIOServer) {
             isFinal: true,
             bufferDuration: duration,
             confidence: result.confidence,
+            source: source,
           });
 
-          // Google Sheetsに保存(非同期)
-          saveToSheets(data.sessionId, result.text).catch((error) => {
-            console.error('Failed to save to sheets:', error);
-          });
+          // Google Sheetsに保存(非同期) - 未設定のためコメントアウト
+          // saveToSheets(data.sessionId, result.text, source).catch((error) => {
+          //   console.error('Failed to save to sheets:', error);
+          // });
         }
 
         // バッファをクリア
-        audioBufferService.clearBuffer(data.sessionId);
+        audioBufferService.clearBuffer(bufferSessionId);
       } catch (error) {
         console.error('Error processing speech:', error);
         socket.emit('error', {
@@ -136,8 +174,8 @@ export function setupSocketHandlers(io: SocketIOServer) {
     socket.on('reset_session', async (data: { sessionId: string }) => {
       console.log(`Session reset requested: ${data.sessionId}`);
 
-      // Sheetsのセッション管理をリセット
-      await googleSheetsService.resetSession(data.sessionId);
+      // Sheetsのセッション管理をリセット - 未設定のためコメントアウト
+      // await googleSheetsService.resetSession(data.sessionId);
 
       // 新しいセッションを作成
       const session = audioBufferService.getSession(data.sessionId);
@@ -161,15 +199,20 @@ export function setupSocketHandlers(io: SocketIOServer) {
 async function saveToSheets(
   sessionId: string,
   text: string,
+  source: string,
 ): Promise<void> {
-  const session = audioBufferService.getSession(sessionId);
+  const bufferSessionId = `${sessionId}_${source}`;
+  const session = audioBufferService.getSession(bufferSessionId);
   if (!session) return;
 
   const isNewSession = session.sheetsRowNumber === undefined;
 
+  // 音声ソースをテキストに追加
+  const textWithSource = `[${source === 'microphone' ? 'マイク' : 'タブ'}] ${text}`;
+
   await googleSheetsService.updateOrAppendTranscript(
-    sessionId,
-    text,
+    bufferSessionId,
+    textWithSource,
     isNewSession,
   );
 }

@@ -37,11 +37,11 @@ export default function MermaidViewer({ code }: MermaidViewerProps) {
           }
         }
       } catch (error) {
-        console.error("マーメイド図のレンダリングエラー:", error);
+        console.error("マーメイド記法のレンダリングエラー:", error);
         if (containerRef.current) {
           containerRef.current.innerHTML = `
             <div class="text-red-600 p-4 border border-red-300 rounded bg-red-50">
-              <p class="font-bold">マーメイド図のレンダリングに失敗しました</p>
+              <p class="font-bold">マーメイド記法のレンダリングに失敗しました</p>
               <p class="text-sm mt-2">コードに構文エラーがある可能性があります。</p>
               <pre class="mt-2 text-xs overflow-auto">${String(error)}</pre>
             </div>
