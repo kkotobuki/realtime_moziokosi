@@ -60,34 +60,7 @@ npm install
 ```bash
 https://drive.google.com/drive/folders/1BhDQG-wbT78UkORWoFFE1Z2TAA9JGdwV?usp=drive_link
 ```
-
 `.env.example` を参考に `.env` を作成してください。
-
-```bash
-cp .env.example .env
-```
-
-`.env` を編集して以下の値を設定:
-
-```env
-# Groq API (STT用)
-GROQ_API_KEY=your_groq_api_key_here
-
-# Google Sheets API (サービスアカウント方式)
-GOOGLE_SHEETS_CLIENT_EMAIL=your-service-account@project.iam.gserviceaccount.com
-GOOGLE_SHEETS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GOOGLE_SHEETS_SPREADSHEET_ID=your_spreadsheet_id_here
-
-# Gemini API (マーメイド記法生成)
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Server Configuration
-PORT=3000
-NODE_ENV=development
-
-# CORS設定
-CORS_ORIGIN=http://localhost:3000
-```
 
 ## 画面から聞こえる音声を文字起こしするために必要な設定
 
